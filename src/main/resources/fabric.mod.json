@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "jeraddon",
+  "version": "${version}",
+  "name": "Jeraddon 1.20.4",
+  "description": "Jeraddon 1.20.4 测试版：自动登入与发包防踢。",
+  "authors": ["Jerinin"],
+  "environment": "client",
+  "entrypoints": {
+    "meteor": ["com.example.addon.AddonTemplate"]
+  },
+  "mixins": [
+    "addon-template.mixins.json"
+  ],
+  "depends": {
+    "java": ">=17",
+    "minecraft": "1.20.4",
+    "meteor-client": "0.5.6"
+  }
+}

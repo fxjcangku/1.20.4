@@ -47,6 +47,7 @@ public class AutoEnchantBook extends JeraddonModule {
 
     private final SettingGroup sgBasic    = settings.createGroup("基础设置");
     private final SettingGroup sgAdvanced = settings.createGroup("扩展附魔分类");
+    private final SettingGroup sgCustom   = settings.createGroup("自定义附魔");
     private final SettingGroup sgVanilla  = settings.createGroup("原版附魔分类");
     private final SettingGroup sgSword    = settings.createGroup("剑附魔属性");
     private final SettingGroup sgAxe      = settings.createGroup("斧头附魔属性");
@@ -74,6 +75,12 @@ public class AutoEnchantBook extends JeraddonModule {
 
     private final Setting<Integer> 青金石补给组数 = sgBasic.add(new IntSetting.Builder()
         .name("青金石补给组数").description("每次去青金石箱抓取的组数（1组=64个）").defaultValue(1).min(1).max(10).sliderMax(5).build());
+
+    private final Setting<List<String>> 自定义附魔 = sgCustom.add(new StringListSetting.Builder()
+        .name("自定义附魔目标")
+        .description("每行填写一个附魔名称和等级，例如：打雷 5。支持中文、阿拉伯数字、罗马数字和不带等级的附魔。")
+        .defaultValue(List.of())
+        .build());
 
     private final Setting<RunMode> 运行模式 = sgBasic.add(new EnumSetting.Builder<RunMode>()
         .name("运行模式").description("纯附魔模式只使用当前经验，经验低于30级时停止；挂机循环会前往挂机点刷经验").defaultValue(RunMode.EXPERIENCE).build());
@@ -438,6 +445,7 @@ public class AutoEnchantBook extends JeraddonModule {
                 "§f  · §e单轮抽取次数§f — 普通模式每轮计划执行的附魔次数",
                 "§f  · §eGUI操作延迟§f — 服务器卡顿或吞点击时适当调大",
                 "§f  · §e书本/青金石补给组数§f — 每次补给希望保有的组数",
+                "§f  · §e自定义附魔目标§f — 每行填写一个附魔名称，可带等级；例如“打雷5”，无需输入空格",
                 "§f  · §e运行模式§f — 纯附魔模式只消耗当前经验，低于 30 级提示停止；挂机循环会前往挂机点补经验",
                 "§f  · §eESP标点§f — 开关六个已设置点位的固定 0.6 字号名称",
                 "§f  · §e返回挂机视角§f — 回到挂机位后恢复设置点位时的视角",
@@ -521,6 +529,9 @@ public class AutoEnchantBook extends JeraddonModule {
 
     @Override
     public void onDeactivate() {
+        // #region debug-point E:deactivate
+        debugEvent("E", "模块停用", "state=" + state + ",phase=" + guiPhase + ",guiTick=" + guiTick + ",screen=" + screenName() + ",lapis=" + countInInventory(Items.LAPIS_LAZULI));
+        // #endregion
         stopKillAura();
         stopBaritone();
     }
@@ -530,6 +541,9 @@ public class AutoEnchantBook extends JeraddonModule {
     @EventHandler
     private void onOpenScreen(OpenScreenEvent event) {
         if (mc.player == null) return;
+        // #region debug-point D:screen-event
+        debugEvent("D", "界面事件", "eventScreen=" + (event.screen == null ? "none" : event.screen.getClass().getSimpleName()) + ",state=" + state + ",phase=" + guiPhase + ",currentScreen=" + screenName() + ",handler=" + mc.player.currentScreenHandler.getClass().getSimpleName());
+        // #endregion
         if (state == State.ENCHANTING && event.screen instanceof EnchantmentScreen && guiPhase == GUI_OPEN_PENDING) {
             guiPhase = 0;
             guiTick = GUI操作延迟.get();
@@ -806,18 +820,33 @@ public class AutoEnchantBook extends JeraddonModule {
         String target = normalizeEnchantmentText(task);
         if (line.equals(target)) return true;
 
+        String compactTarget = target.replace(" ", "");
         int separator = target.lastIndexOf(' ');
-        if (separator <= 0 || separator == target.length() - 1) return line.contains(target);
+        String name;
+        String level;
+        if (separator > 0 && separator < target.length() - 1) {
+            name = target.substring(0, separator);
+            level = target.substring(separator + 1);
+        } else if (compactTarget.matches(".+\\d+")) {
+            int levelStart = compactTarget.length();
+            while (levelStart > 0 && Character.isDigit(compactTarget.charAt(levelStart - 1))) levelStart--;
+            name = compactTarget.substring(0, levelStart);
+            level = compactTarget.substring(levelStart);
+        } else {
+            return line.replace(" ", "").contains(compactTarget);
+        }
 
-        String name = target.substring(0, separator);
-        String level = target.substring(separator + 1);
-        if (!level.matches("\\d+")) return line.contains(target);
+        if (!level.matches("\\d+") || name.isEmpty()) return line.replace(" ", "").contains(compactTarget);
 
         int nameIndex = line.indexOf(name);
+        if (nameIndex < 0) nameIndex = line.replace(" ", "").indexOf(name.replace(" ", ""));
         if (nameIndex < 0) return false;
 
-        String suffix = line.substring(nameIndex + name.length()).trim();
-        return suffix.matches("^(?:[：:\\-—|]\\s*)?(?:等级\\s*)?(?:[Ll][Vv]\\.?\\s*)?" + level + "(?:\\D.*|$)");
+        String compactLine = line.replace(" ", "");
+        int compactNameIndex = compactLine.indexOf(name.replace(" ", ""));
+        if (compactNameIndex < 0) return false;
+        String suffix = compactLine.substring(compactNameIndex + name.replace(" ", "").length()).trim();
+        return suffix.matches("^(?:[：:\\-—|]?等级?)?" + level + "(?:\\D.*|$)");
     }
 
     private String normalizeEnchantmentText(String text) {
@@ -1042,7 +1071,7 @@ public class AutoEnchantBook extends JeraddonModule {
             return;
         }
 
-        // 在箱子里找物品并抓取
+        // 在箱子里找物品并抓取（每次只拿一组，留在GUI内继续检查）
         int grabbed = 0;
         for (int i = 0; i < handler.getRows() * 9 && grabbed < needCount; i++) {
             ItemStack stack = handler.getSlot(i).getStack();
@@ -1055,42 +1084,27 @@ public class AutoEnchantBook extends JeraddonModule {
                 mc.interactionManager.clickSlot(syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                 grabbed += movedCount;
                 guiTick = GUI操作延迟.get();
-                break;
+                // 拿了一组后不关闭GUI，下一个tick继续检查是否需要更多
+                return;
             }
         }
 
-        if (grabbed == 0) {
-            // 箱内物资耗尽
-            String name = isLapis ? "青金石" : "空白书";
-            // #region debug-point G:empty-chest-scan
-            StringBuilder chestContents = new StringBuilder();
-            for (int i = 0; i < handler.getRows() * 9; i++) {
-                ItemStack stack = handler.getSlot(i).getStack();
-                if (!stack.isEmpty()) {
-                    if (chestContents.length() > 0) chestContents.append(";");
-                    chestContents.append(i).append(":").append(stack.getItem()).append("x").append(stack.getCount());
-                }
+        // 循环完毕仍未找到物品 = 箱内物资耗尽
+        String name = isLapis ? "青金石" : "空白书";
+        // #region debug-point G:empty-chest-scan
+        StringBuilder chestContents = new StringBuilder();
+        for (int i = 0; i < handler.getRows() * 9; i++) {
+            ItemStack stack = handler.getSlot(i).getStack();
+            if (!stack.isEmpty()) {
+                if (chestContents.length() > 0) chestContents.append(";");
+                chestContents.append(i).append(":").append(stack.getItem()).append("x").append(stack.getCount());
             }
-            debugEvent("G", "补给箱未找到目标物品", "item=" + (isLapis ? "lapis" : "book") + ",current=" + currentCount + ",need=" + needCount + ",syncId=" + syncId + ",contents=" + chestContents);
-            // #endregion
-            mc.player.closeHandledScreen();
-            notifyError(name + "补给箱已空！自动停机。");
-            toggle();
-            return;
         }
-
-        mc.player.closeHandledScreen();
-        // #region debug-point F:chest-close-transfer
-        debugEvent("F", "抓取后关闭补给箱", "item=" + (isLapis ? "lapis" : "book") + ",grabbed=" + grabbed + ",booksNow=" + countInInventory(Items.BOOK) + ",next=" + (!isLapis && needLapisRestock() ? "WALK_TO_RESTOCK" : "IDLE"));
+        debugEvent("G", "补给箱未找到目标物品", "item=" + (isLapis ? "lapis" : "book") + ",current=" + currentCount + ",need=" + needCount + ",syncId=" + syncId + ",contents=" + chestContents);
         // #endregion
-        guiTick = GUI操作延迟.get();
-
-        if (!isLapis && needLapisRestock()) {
-            setState(State.WALK_TO_RESTOCK);
-            guiPhase = 10;
-        } else {
-            setState(State.IDLE);
-        }
+        mc.player.closeHandledScreen();
+        notifyError(name + "补给箱已空！自动停机。");
+        toggle();
     }
 
     // ── 3D 渲染 ────────────────────────────────────────────────────────────
@@ -1211,6 +1225,10 @@ public class AutoEnchantBook extends JeraddonModule {
                 }
             }
         }
+        for (String task : 自定义附魔.get()) {
+            String normalized = normalizeEnchantmentText(task);
+            if (!normalized.isEmpty() && !activeTasks.contains(normalized)) activeTasks.add(normalized);
+        }
     }
 
     private int findMergeableInventorySlot(ItemStack stack) {
@@ -1287,7 +1305,7 @@ public class AutoEnchantBook extends JeraddonModule {
                 connection.setReadTimeout(250);
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json");
-                String payload = "{\"sessionId\":\"book-chest-loop\",\"runId\":\"pre-fix\",\"hypothesisId\":\"" + hypothesisId + "\",\"location\":\"AutoEnchantBook\",\"msg\":\"[DEBUG] " + debugJson(message) + "\",\"data\":{\"sequence\":" + sequence + ",\"detail\":\"" + debugJson(data) + "\"}}";
+                String payload = "{\"sessionId\":\"enchant-resource\",\"runId\":\"pre-fix\",\"hypothesisId\":\"" + hypothesisId + "\",\"location\":\"AutoEnchantBook\",\"msg\":\"[DEBUG] " + debugJson(message) + "\",\"data\":{\"sequence\":" + sequence + ",\"detail\":\"" + debugJson(data) + "\"}}";
                 try (OutputStream output = connection.getOutputStream()) {
                     output.write(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 }
@@ -1303,7 +1321,7 @@ public class AutoEnchantBook extends JeraddonModule {
         long sequence = ++debugSequence;
         new Thread(() -> {
             try {
-                HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:7778/event").openConnection();
+                HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:7777/event").openConnection();
                 connection.setRequestMethod("POST");
                 connection.setConnectTimeout(250);
                 connection.setReadTimeout(250);

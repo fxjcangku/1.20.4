@@ -134,6 +134,7 @@ public class ServerHelperModule extends JeraddonModule {
     private String leyuanStageDimension = "";
     private Vec3d leyuanStagePosition;
     private boolean leyuanAfkAreaHandled;
+    private int leyuanAfkAreaWaitTicks;
     private boolean subserverCommandPending;
     private int subserverCommandTicks;
     private boolean waitingForTargetArea;
@@ -237,8 +238,9 @@ public class ServerHelperModule extends JeraddonModule {
                 "§b§l▌ 路线与指令",
                 "§f  通用子服路线仅用于直接进入以外的前三种普通模式",
                 "§f  开启「检测服务器子服」后，子服连接会沿用大厅认证状态",
-                "§f  乐源路线通过侧边栏关键词确认主城、挂机区和最终目标",
-                "§f  每步等待和单步超时均按 20 tick = 1 秒计算"
+                "§f  · 乐源路线通过侧边栏关键词确认主城、挂机区和最终目标",
+                "§f  · 挂机区菜单延迟只影响检测到挂机区后的首次菜单打开，不影响登录和其他路线",
+                "§f  · 每步等待和单步超时均按 20 tick = 1 秒计算"
             },
             new String[]{
                 "§b§l▌ 状态说明",
@@ -426,10 +428,12 @@ public class ServerHelperModule extends JeraddonModule {
             }
 
             case REGISTERING -> {
+                reportAutoLoginDebug("tick-register", "state=" + state + ",registerActive=" + registerHandler.isActive() + ",loginSent=" + loginSent + ",autoLogin=" + cfg.autoLogin.get());
                 registerHandler.tick();
             }
 
             case LOGGING_IN -> {
+                reportAutoLoginDebug("tick-login", "state=" + state + ",loginActive=" + loginHandler.isActive() + ",loginSent=" + loginSent + ",autoLogin=" + cfg.autoLogin.get() + ",network=" + (mc.getNetworkHandler() != null));
                 loginHandler.tick();
             }
 
@@ -1074,7 +1078,17 @@ public class ServerHelperModule extends JeraddonModule {
         }
         int slot = findLeyuanMenuItemSlot();
         // #region debug-point H4:hotbar
-        debugReport("H4", "open-menu-hotbar", Map.of("slot", slot, "tool", cfg.leyuanMenuTool.get().toString(), "keywords", cfg.leyuanMenuItemKeywords.get().toString(), "items", leyuanHotbarSnapshot()));
+        debugReport("H4", "open-menu-attempt", Map.of(
+            "state", leyuanRouteState.toString(),
+            "stateTicks", leyuanStateTicks,
+            "actionTicks", leyuanActionTicks,
+            "slot", slot,
+            "screen", mc.currentScreen == null ? "null" : mc.currentScreen.getClass().getSimpleName(),
+            "afkWaitTicks", leyuanAfkAreaWaitTicks,
+            "afkHandled", leyuanAfkAreaHandled,
+            "configuredMinutes", cfg.leyuanAfkMenuDelayMinutes.get(),
+            "items", leyuanHotbarSnapshot()
+        ));
         // #endregion
         if (slot < 0) return false;
         if (mc.player.getInventory().selectedSlot != slot) {
@@ -1287,11 +1301,43 @@ public class ServerHelperModule extends JeraddonModule {
     private void tickLeyuanAfkRecoveryTrigger() {
         if (!isLeyuanAfkRecoveryEnabled()) return;
         boolean inAfkArea = findSidebarKeyword(cfg.leyuanAfkAreaKeywords.get()) != null;
+        int configuredMinutes = Math.max(0, cfg.leyuanAfkMenuDelayMinutes.get());
+        int requiredWaitTicks = configuredMinutes * 60 * 20;
+        reportAutoLoginDebug("H1-H5", "afk-observation:inAfkArea=" + inAfkArea
+            + ",configuredMinutes=" + configuredMinutes
+            + ",waitTicks=" + leyuanAfkAreaWaitTicks
+            + ",requiredWaitTicks=" + requiredWaitTicks
+            + ",handled=" + leyuanAfkAreaHandled
+            + ",routeState=" + leyuanRouteState
+            + ",serverState=" + state);
         if (!inAfkArea) {
+            if (leyuanAfkAreaWaitTicks > 0) {
+                reportAutoLoginDebug("H1", "afk-reset:离开挂机区，重置计时：" + leyuanAfkAreaWaitTicks + " ticks");
+            }
+            leyuanAfkAreaWaitTicks = 0;
             leyuanAfkAreaHandled = false;
             return;
         }
         if (leyuanAfkAreaHandled || isLeyuanRouteRunning() || state != ServerHelperState.ACTIVE) return;
+
+        if (leyuanAfkAreaWaitTicks < requiredWaitTicks) {
+            leyuanAfkAreaWaitTicks++;
+            if (leyuanAfkAreaWaitTicks == 1 || leyuanAfkAreaWaitTicks % 20 == 0 || leyuanAfkAreaWaitTicks == requiredWaitTicks) {
+                reportAutoLoginDebug("H1-H5", "afk-progress:waitTicks=" + leyuanAfkAreaWaitTicks
+                    + ",requiredWaitTicks=" + requiredWaitTicks
+                    + ",configuredMinutes=" + configuredMinutes
+                    + ",routeState=" + leyuanRouteState
+                    + ",serverState=" + state);
+            }
+            return;
+        }
+
+        reportAutoLoginDebug("H2", "afk-delay-complete:waitTicks=" + leyuanAfkAreaWaitTicks
+            + ",requiredWaitTicks=" + requiredWaitTicks
+            + ",configuredMinutes=" + configuredMinutes
+            + ",previousRouteState=" + leyuanRouteState
+            + ",serverState=" + state);
+
         leyuanAfkAreaHandled = true;
         leyuanLastScreenFingerprint = 0;
         leyuanMenuUseCooldown = 0;
@@ -1299,6 +1345,7 @@ public class ServerHelperModule extends JeraddonModule {
         leyuanCityMenuFallbackRetryTick = 0;
         leyuanCityMenuFallbackPhase = 0;
         setLeyuanState(LeyuanRouteState.OPEN_AFK_MENU, cfg.leyuanStepDelay.get());
+        reportAutoLoginDebug("afk-delay", "挂机区菜单延迟完成，开始打开菜单");
         notify("自动登入：检测到" + highlightLocation("挂机区") + "，开始执行乐源自动回服路线。");
     }
 
@@ -1377,6 +1424,13 @@ public class ServerHelperModule extends JeraddonModule {
     }
 
     private void setLeyuanState(LeyuanRouteState next, int delay) {
+        LeyuanRouteState previous = leyuanRouteState;
+        reportAutoLoginDebug("H2", "route-transition:from=" + previous
+            + ",to=" + next
+            + ",delay=" + delay
+            + ",afkWaitTicks=" + leyuanAfkAreaWaitTicks
+            + ",afkHandled=" + leyuanAfkAreaHandled
+            + ",serverState=" + state);
         leyuanRouteState = next;
         leyuanStateTicks = 0;
         leyuanActionTicks = Math.max(0, delay);
@@ -1511,6 +1565,7 @@ public class ServerHelperModule extends JeraddonModule {
         leyuanStageDimension = "";
         leyuanStagePosition = null;
         leyuanAfkAreaHandled = false;
+        leyuanAfkAreaWaitTicks = 0;
     }
 
     private void stopStandardMenuRoute() {
@@ -1688,28 +1743,29 @@ public class ServerHelperModule extends JeraddonModule {
     private void reportAutoLoginDebug(String point, String data) {
         new Thread(() -> {
             try {
-                Path env = Path.of(".dbg", "auto-login.env");
+                Path env = Path.of("d:/mcaddon/1.20.4/.dbg/auto-login-afk-delay.env");
                 String config = Files.exists(env) ? Files.readString(env) : "";
                 String url = "http://127.0.0.1:7777/event";
-                String session = "auto-login";
+                String session = "auto-login-afk-delay";
                 for (String line : config.split("\\R")) {
                     if (line.startsWith("DEBUG_SERVER_URL=")) url = line.substring(18).trim();
                     if (line.startsWith("DEBUG_SESSION_ID=")) session = line.substring(18).trim();
                 }
-                String payload = "{\"sessionId\":\"" + session + "\",\"runId\":\"pre\",\"hypothesisId\":\"" + point + "\",\"location\":\"ServerHelperModule\",\"msg\":\"[DEBUG] auto-login\",\"data\":{\"value\":\"" + data.replace("\\", "\\\\").replace("\"", "\\\"") + "\"},\"ts\":" + System.currentTimeMillis() + "}";
+                String payload = "{\"sessionId\":\"" + escapeJson(session) + "\",\"runId\":\"post-fix-afk-delay\",\"hypothesisId\":\"" + escapeJson(point) + "\",\"location\":\"ServerHelperModule\",\"msg\":\"[DEBUG] auto-login\",\"data\":{\"value\":\"" + escapeJson(data) + "\"},\"ts\":" + System.currentTimeMillis() + "}";
                 HttpURLConnection connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
                 connection.setRequestMethod("POST");
-                connection.setConnectTimeout(500);
-                connection.setReadTimeout(500);
+                connection.setConnectTimeout(1000);
+                connection.setReadTimeout(1000);
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json");
                 try (OutputStream output = connection.getOutputStream()) {
                     output.write(payload.getBytes(StandardCharsets.UTF_8));
                 }
+                connection.getResponseCode();
                 connection.disconnect();
             } catch (Exception ignored) {
             }
-        }).start();
+        }, "jeraddon-auto-login-debug").start();
     }
     // #endregion
 }

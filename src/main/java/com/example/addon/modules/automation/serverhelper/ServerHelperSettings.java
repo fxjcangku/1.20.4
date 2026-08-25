@@ -72,6 +72,7 @@ public final class ServerHelperSettings {
     public final Setting<String> leyuanTargetServerKeyword;
     public final Setting<List<String>> leyuanMainCityKeywords;
     public final Setting<Boolean> leyuanAfkRecoveryEnabled;
+    public final Setting<Integer> leyuanAfkMenuDelayMinutes;
     public final Setting<List<String>> leyuanAfkAreaKeywords;
     public final Setting<List<String>> leyuanReturnMainCityKeywords;
     public final Setting<List<String>> leyuanTargetAreaKeywords;
@@ -426,6 +427,16 @@ public final class ServerHelperSettings {
             .description("挂机区独立开关：检测到挂机区后执行返回主城大区、世界传送、资源大区、资源大区、资源二区；不受乐源服总开关影响。")
             .defaultValue(true)
             .visible(this::usesLeyuanMode)
+            .build());
+
+        leyuanAfkMenuDelayMinutes = grpLeyuan.add(new IntSetting.Builder()
+            .name("挂机区菜单延迟（分钟）")
+            .description("检测到挂机区后等待多久再打开菜单，避免服务器重启后菜单尚未准备好。默认 10 分钟，设置为 0 立即打开。")
+            .defaultValue(10)
+            .min(0)
+            .max(120)
+            .sliderRange(0, 60)
+            .visible(() -> usesLeyuanMode() && leyuanAfkRecoveryEnabled.get())
             .build());
 
         leyuanReturnMainCityKeywords = grpLeyuan.add(new StringListSetting.Builder()

@@ -8,3 +8,8 @@ out/
 *.iml
 *.log
 hs_err_pid*
+
+# debug artifacts
+.dbg/
+debug-*.md
+*.ndjson

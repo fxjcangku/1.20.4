@@ -530,7 +530,7 @@ public class AutoEnchantBook extends JeraddonModule {
     @Override
     public void onDeactivate() {
         // #region debug-point E:deactivate
-        debugEvent("E", "模块停用", "state=" + state + ",phase=" + guiPhase + ",guiTick=" + guiTick + ",screen=" + screenName() + ",lapis=" + countInInventory(Items.LAPIS_LAZULI));
+        debugEvent("E", "模块停用", "停机原因=" + debugStopReason + ",状态=" + state + ",阶段=" + guiPhase + ",界面节拍=" + guiTick + ",界面=" + screenName() + ",经验=" + (mc.player == null ? -1 : mc.player.experienceLevel) + ",青金石=" + (mc.player == null ? -1 : countInInventory(Items.LAPIS_LAZULI)) + ",模式=" + 运行模式.get() + ",寻路中=" + isPathing());
         // #endregion
         stopKillAura();
         stopBaritone();
@@ -590,7 +590,7 @@ public class AutoEnchantBook extends JeraddonModule {
 
     private void tickIdle() {
         // #region debug-point J:idle-decision
-        debugReturnEvent("J", "IDLE决策", "remaining=" + remainingAttempts + ",configured=" + 单轮抽取次数.get() + ",xp=" + mc.player.experienceLevel + ",mode=" + 运行模式.get() + ",needRestock=" + needRestock() + ",pathing=" + isPathing());
+        debugReturnEvent("J", "空闲决策", "剩余次数=" + remainingAttempts + "，配置次数=" + 单轮抽取次数.get() + "，经验=" + mc.player.experienceLevel + "，模式=" + 运行模式.get() + "，需要补给=" + needRestock() + "，寻路中=" + isPathing());
         // #endregion
         // 检查补给
         if (needRestock()) {
@@ -669,6 +669,7 @@ public class AutoEnchantBook extends JeraddonModule {
         if (!(mc.currentScreen instanceof EnchantmentScreen) && !isBlockAt(posEnchant, Blocks.ENCHANTING_TABLE)) {
             stopBaritone();
             notifyError("附魔台不存在或已被挖掉，自动化已停止。请重新设置附魔台点位。");
+            debugStopRequest("附魔过程中附魔台不存在");
             toggle();
             return;
         }
@@ -681,7 +682,7 @@ public class AutoEnchantBook extends JeraddonModule {
         if (!(mc.currentScreen instanceof EnchantmentScreen)) {
             if (guiPhase == 0) {
                 // #region debug-point H:enchant-open
-                debugEvent("H", "请求打开附魔台", "state=" + state + ",phase=" + guiPhase + ",lapis=" + countInInventory(Items.LAPIS_LAZULI) + ",xp=" + mc.player.experienceLevel + ",screen=" + screenName());
+                debugEvent("H", "请求打开附魔台", "状态=" + state + "，阶段=" + guiPhase + "，青金石=" + countInInventory(Items.LAPIS_LAZULI) + "，经验=" + mc.player.experienceLevel + "，界面=" + screenName());
                 // #endregion
                 interactBlock(posEnchant);
                 guiPhase = GUI_OPEN_PENDING;
@@ -1053,7 +1054,7 @@ public class AutoEnchantBook extends JeraddonModule {
         int needCount = (isLapis ? 青金石补给组数.get() : 书本补给组数.get()) * 64 - currentCount;
 
         // #region debug-point C:restock-decision
-        debugEvent("C", "补给库存判定", "state=" + state + ",phase=" + guiPhase + ",item=" + (isLapis ? "lapis" : "book") + ",current=" + currentCount + ",threshold=" + threshold + ",need=" + needCount + ",syncId=" + syncId + ",chestSlots=" + (handler.getRows() * 9));
+        debugEvent("C", "补给库存判定", "状态=" + state + "，阶段=" + guiPhase + "，物品=" + (isLapis ? "青金石" : "空白书") + "，背包数量=" + currentCount + "，补给阈值=" + threshold + "，需补数量=" + needCount + "，容器同步号=" + syncId + "，箱子格数=" + (handler.getRows() * 9));
         // #endregion
 
         if (needCount <= 0) {
@@ -1264,6 +1265,7 @@ public class AutoEnchantBook extends JeraddonModule {
         if (运行模式.get() == RunMode.EXPERIENCE && posHangout == null) missing.append("挂机位 ");
         if (missing.length() > 0) {
             notifyError("坐标未设置：§c" + missing + "§6请用 .fumo set <节点> 设置后重试！");
+            debugStopRequest("坐标未设置：" + missing);
             toggle();
             return false;
         }
@@ -1294,7 +1296,14 @@ public class AutoEnchantBook extends JeraddonModule {
         return count;
     }
 
-    // #region debug-point A:book-chest-loop
+    // #region debug-point O:stop-reason
+    private void debugStopRequest(String reason) {
+        debugStopReason = reason;
+        debugEvent("O", "请求停机", "原因=" + reason + "，状态=" + state + "，阶段=" + guiPhase + "，界面节拍=" + guiTick + "，界面=" + screenName() + "，经验=" + (mc.player == null ? -1 : mc.player.experienceLevel) + "，青金石=" + (mc.player == null ? -1 : countInInventory(Items.LAPIS_LAZULI)) + "，模式=" + 运行模式.get() + "，寻路中=" + isPathing());
+    }
+    // #endregion
+
+    // #region debug-point A:chest-lapis-close
     private void debugEvent(String hypothesisId, String message, String data) {
         long sequence = ++debugSequence;
         new Thread(() -> {
@@ -1305,7 +1314,7 @@ public class AutoEnchantBook extends JeraddonModule {
                 connection.setReadTimeout(250);
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json");
-                String payload = "{\"sessionId\":\"enchant-resource\",\"runId\":\"pre-fix\",\"hypothesisId\":\"" + hypothesisId + "\",\"location\":\"AutoEnchantBook\",\"msg\":\"[DEBUG] " + debugJson(message) + "\",\"data\":{\"sequence\":" + sequence + ",\"detail\":\"" + debugJson(data) + "\"}}";
+                String payload = "{\"sessionId\":\"chest-lapis-close\",\"runId\":\"pre-fix\",\"hypothesisId\":\"" + hypothesisId + "\",\"location\":\"AutoEnchantBook\",\"msg\":\"[杰瑞附加][自动附魔] " + debugJson(message) + "\",\"data\":{\"sequence\":" + sequence + ",\"detail\":\"" + debugJson(data) + "\"}}";
                 try (OutputStream output = connection.getOutputStream()) {
                     output.write(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 }
@@ -1313,8 +1322,9 @@ public class AutoEnchantBook extends JeraddonModule {
                 connection.disconnect();
             } catch (Exception ignored) {
             }
-        }, "book-chest-loop-debug").start();
+        }, "chest-lapis-close-debug").start();
     }
+    // #endregion
 
     // #region debug-point J:single-attempt-return
     private void debugReturnEvent(String hypothesisId, String message, String data) {
